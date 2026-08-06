@@ -23,6 +23,14 @@ flutter analyze
 flutter test
 ```
 
+## Play in Chrome
+
+After merge to `main`, GitHub Actions deploys the web build to GitHub Pages:
+
+**https://zakarbrnd-byte.github.io/racing-car-game/**
+
+> One-time setup: repo **Settings → Pages → Source: GitHub Actions**.
+
 ## GitHub Actions
 
 CI runs on every push/PR to `main`:
@@ -30,3 +38,4 @@ CI runs on every push/PR to `main`:
 1. `flutter analyze`
 2. `flutter test`
 3. `flutter build web --release`
+4. Deploy to **GitHub Pages** (push to `main` only)
