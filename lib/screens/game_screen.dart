@@ -41,6 +41,7 @@ class _GameScreenState extends State<GameScreen>
   static const int laneCount = 3;
   static const double playerCarHeight = 110;
   static const double playerCarWidth = 64;
+  static const double maxPlayWidth = 430;
 
   late final Ticker _ticker;
   Duration _lastTick = Duration.zero;
@@ -57,6 +58,8 @@ class _GameScreenState extends State<GameScreen>
   final math.Random _rng = math.Random();
   int _score = 0;
   int _highScore = 0;
+
+  Size _playSize = Size.zero;
 
   @override
   void initState() {
@@ -81,10 +84,9 @@ class _GameScreenState extends State<GameScreen>
         : (elapsed - _lastTick).inMicroseconds / 1e6;
     _lastTick = elapsed;
     if (dt <= 0 || dt > 0.1) return;
+    if (_playSize == Size.zero) return;
 
-    final size = MediaQuery.sizeOf(context);
-    final roadTop = 0.0;
-    final roadBottom = size.height;
+    final roadBottom = _playSize.height;
     final playerY = roadBottom - playerCarHeight - 48;
 
     setState(() {
@@ -93,7 +95,6 @@ class _GameScreenState extends State<GameScreen>
       _distance += _speed * dt;
       _score = (_distance / 10).floor();
 
-      // Smooth lane change
       _laneAnim += (_lane - _laneAnim) * math.min(1, dt * 12);
 
       _spawnTimer += dt;
@@ -108,13 +109,12 @@ class _GameScreenState extends State<GameScreen>
       }
       _obstacles.removeWhere((o) => o.y > roadBottom + 40);
 
-      _checkCollisions(size.width, playerY, roadTop);
+      _checkCollisions(_playSize.width, playerY);
     });
   }
 
   void _spawnObstacle() {
     final lane = _rng.nextInt(laneCount);
-    // Avoid packing same lane as the last obstacle too tightly
     if (_obstacles.isNotEmpty &&
         _obstacles.last.lane == lane &&
         _obstacles.last.y < 160) {
@@ -138,24 +138,30 @@ class _GameScreenState extends State<GameScreen>
       ),
     );
 
-    // Occasional second obstacle in another lane
     if (_rng.nextDouble() < 0.28) {
       var other = _rng.nextInt(laneCount);
       if (other == lane) other = (lane + 1) % laneCount;
+      final otherKind =
+          ObstacleKind.values[_rng.nextInt(ObstacleKind.values.length)];
+      final otherDims = switch (otherKind) {
+        ObstacleKind.cone => (42.0, 48.0),
+        ObstacleKind.barrier => (58.0, 36.0),
+        ObstacleKind.oil => (50.0, 34.0),
+      };
       _obstacles.add(
         Obstacle(
           lane: other,
-          y: -dims.$2 - 120,
-          width: dims.$1,
-          height: dims.$2,
-          kind: ObstacleKind.values[_rng.nextInt(ObstacleKind.values.length)],
+          y: -otherDims.$2 - 120,
+          width: otherDims.$1,
+          height: otherDims.$2,
+          kind: otherKind,
         ),
       );
     }
   }
 
-  void _checkCollisions(double screenWidth, double playerY, double roadTop) {
-    final laneWidth = screenWidth / laneCount;
+  void _checkCollisions(double playWidth, double playerY) {
+    final laneWidth = playWidth / laneCount;
     final playerCenterX = (_laneAnim + 0.5) * laneWidth;
     final playerRect = Rect.fromCenter(
       center: Offset(playerCenterX, playerY + playerCarHeight / 2),
@@ -204,111 +210,153 @@ class _GameScreenState extends State<GameScreen>
     });
   }
 
+  void _onPointer(Offset local, Size playSize) {
+    if (_status == GameStatus.gameOver) return;
+    if (local.dx < playSize.width / 2) {
+      _moveLeft();
+    } else {
+      _moveRight();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
-    final laneWidth = size.width / laneCount;
-    final playerY = size.height - playerCarHeight - 48;
-    final playerX = (_laneAnim + 0.5) * laneWidth - playerCarWidth / 2;
-
     return Scaffold(
-      body: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onHorizontalDragEnd: (details) {
-          final v = details.primaryVelocity ?? 0;
-          if (v < -200) {
-            _moveLeft();
-          } else if (v > 200) {
-            _moveRight();
+      backgroundColor: const Color(0xFF0A0D12),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final playWidth = math.min(maxPlayWidth, constraints.maxWidth);
+          final playHeight = constraints.maxHeight;
+          final playSize = Size(playWidth, playHeight);
+          if (_playSize != playSize) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _playSize != playSize) {
+                setState(() => _playSize = playSize);
+              }
+            });
           }
-        },
-        onTapUp: (details) {
-          if (_status == GameStatus.gameOver) return;
-          if (details.localPosition.dx < size.width / 2) {
-            _moveLeft();
-          } else {
-            _moveRight();
-          }
-        },
-        child: Stack(
-          children: [
-            CustomPaint(
-              size: size,
-              painter: _RoadPainter(offset: _roadOffset, laneCount: laneCount),
-            ),
-            ..._obstacles.map((o) {
-              final left = (o.lane + 0.5) * laneWidth - o.width / 2;
-              return Positioned(
-                left: left,
-                top: o.y,
-                width: o.width,
-                height: o.height,
-                child: _ObstacleView(kind: o.kind),
-              );
-            }),
-            Positioned(
-              left: playerX,
-              top: playerY,
-              width: playerCarWidth,
-              height: playerCarHeight,
-              child: Hero(
-                tag: 'car-${widget.car.id}',
-                child: Image.asset(
-                  widget.car.assetPath,
-                  fit: BoxFit.contain,
-                  filterQuality: FilterQuality.high,
-                ),
-              ),
-            ),
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  children: [
-                    IconButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.arrow_back_rounded),
-                      color: AppTheme.cream,
-                    ),
-                    const Spacer(),
-                    _HudChip(
-                      label: 'SCORE',
-                      value: '$_score',
-                      color: widget.car.accentColor,
-                    ),
-                    const SizedBox(width: 10),
-                    _HudChip(
-                      label: 'SPEED',
-                      value: '${(_speed / 10).round()}',
-                      color: AppTheme.roadMark,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            if (_status == GameStatus.gameOver) _GameOverOverlay(
-              score: _score,
-              highScore: _highScore,
-              accent: widget.car.accentColor,
-              onRetry: _restart,
-              onMenu: () => Navigator.of(context).pop(),
-            ),
-            if (_status == GameStatus.playing)
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 12,
-                child: Text(
-                  '← swipe or tap sides to steer →',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.outfit(
-                    fontSize: 12,
-                    color: AppTheme.cream.withValues(alpha: 0.4),
+
+          final laneWidth = playWidth / laneCount;
+          final playerY = playHeight - playerCarHeight - 48;
+          final playerX = (_laneAnim + 0.5) * laneWidth - playerCarWidth / 2;
+
+          return Center(
+            child: SizedBox(
+              width: playWidth,
+              height: playHeight,
+              child: ClipRect(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onHorizontalDragEnd: (details) {
+                    final v = details.primaryVelocity ?? 0;
+                    if (v < -200) {
+                      _moveLeft();
+                    } else if (v > 200) {
+                      _moveRight();
+                    }
+                  },
+                  onTapUp: (details) => _onPointer(details.localPosition, playSize),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Positioned.fill(
+                        child: CustomPaint(
+                          painter: _RoadPainter(
+                            offset: _roadOffset,
+                            laneCount: laneCount,
+                          ),
+                        ),
+                      ),
+                      ..._obstacles.map((o) {
+                        final left = (o.lane + 0.5) * laneWidth - o.width / 2;
+                        return Positioned(
+                          left: left,
+                          top: o.y,
+                          width: o.width,
+                          height: o.height,
+                          child: _ObstacleView(kind: o.kind),
+                        );
+                      }),
+                      Positioned(
+                        left: playerX,
+                        top: playerY,
+                        width: playerCarWidth,
+                        height: playerCarHeight,
+                        child: Hero(
+                          tag: 'car-${widget.car.id}',
+                          child: Image.asset(
+                            widget.car.assetPath,
+                            fit: BoxFit.contain,
+                            filterQuality: FilterQuality.medium,
+                            gaplessPlayback: true,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: SafeArea(
+                          bottom: false,
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(8, 4, 12, 0),
+                            child: Row(
+                              children: [
+                                IconButton(
+                                  onPressed: () => Navigator.of(context).pop(),
+                                  icon: const Icon(Icons.arrow_back_rounded),
+                                  color: AppTheme.cream,
+                                ),
+                                const Spacer(),
+                                _HudChip(
+                                  label: 'SCORE',
+                                  value: '$_score',
+                                  color: widget.car.accentColor,
+                                ),
+                                const SizedBox(width: 8),
+                                _HudChip(
+                                  label: 'SPEED',
+                                  value: '${(_speed / 10).round()}',
+                                  color: AppTheme.roadMark,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (_status == GameStatus.playing)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 16,
+                          child: IgnorePointer(
+                            child: Text(
+                              '← swipe or tap sides to steer →',
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.outfit(
+                                fontSize: 12,
+                                color: AppTheme.cream.withValues(alpha: 0.4),
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (_status == GameStatus.gameOver)
+                        Positioned.fill(
+                          child: _GameOverOverlay(
+                            score: _score,
+                            highScore: _highScore,
+                            accent: widget.car.accentColor,
+                            onRetry: _restart,
+                            onMenu: () => Navigator.of(context).pop(),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ),
-          ],
-        ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -327,33 +375,37 @@ class _HudChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.45)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Text(
-            label,
-            style: GoogleFonts.outfit(
-              fontSize: 10,
-              letterSpacing: 1.2,
-              color: AppTheme.cream.withValues(alpha: 0.6),
+    return Material(
+      color: Colors.black.withValues(alpha: 0.45),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withValues(alpha: 0.45)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              label,
+              style: GoogleFonts.outfit(
+                fontSize: 10,
+                letterSpacing: 1.2,
+                color: AppTheme.cream.withValues(alpha: 0.6),
+              ),
             ),
-          ),
-          Text(
-            value,
-            style: GoogleFonts.bebasNeue(
-              fontSize: 22,
-              height: 1,
-              color: color,
+            Text(
+              value,
+              style: GoogleFonts.bebasNeue(
+                fontSize: 22,
+                height: 1,
+                color: color,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -376,7 +428,7 @@ class _GameOverOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return ColoredBox(
       color: Colors.black.withValues(alpha: 0.72),
       child: Center(
         child: Container(
@@ -465,7 +517,12 @@ class _ConePainter extends CustomPainter {
       ..close();
     canvas.drawPath(path, Paint()..color = const Color(0xFFFF8A3D));
     canvas.drawRect(
-      Rect.fromLTWH(size.width * 0.18, size.height * 0.35, size.width * 0.64, size.height * 0.12),
+      Rect.fromLTWH(
+        size.width * 0.18,
+        size.height * 0.35,
+        size.width * 0.64,
+        size.height * 0.12,
+      ),
       Paint()..color = Colors.white,
     );
     canvas.drawRRect(
@@ -493,7 +550,12 @@ class _BarrierPainter extends CustomPainter {
     for (var i = 0; i < 4; i++) {
       final x = size.width * (0.12 + i * 0.22);
       canvas.drawRect(
-        Rect.fromLTWH(x, size.height * 0.2, size.width * 0.12, size.height * 0.6),
+        Rect.fromLTWH(
+          x,
+          size.height * 0.2,
+          size.width * 0.12,
+          size.height * 0.6,
+        ),
         stripe,
       );
     }
@@ -514,7 +576,10 @@ class _OilPainter extends CustomPainter {
           Colors.transparent,
         ],
       ).createShader(Offset.zero & size);
-    canvas.drawOval(Rect.fromLTWH(0, size.height * 0.15, size.width, size.height * 0.7), paint);
+    canvas.drawOval(
+      Rect.fromLTWH(0, size.height * 0.15, size.width, size.height * 0.7),
+      paint,
+    );
   }
 
   @override
@@ -529,7 +594,6 @@ class _RoadPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Grass / roadside
     final bg = Paint()
       ..shader = const LinearGradient(
         begin: Alignment.topCenter,
@@ -542,12 +606,7 @@ class _RoadPainter extends CustomPainter {
     final roadLeft = (size.width - roadWidth) / 2;
     final roadRect = Rect.fromLTWH(roadLeft, 0, roadWidth, size.height);
 
-    canvas.drawRect(
-      roadRect,
-      Paint()..color = const Color(0xFF2B303B),
-    );
-
-    // Soft edge fade
+    canvas.drawRect(roadRect, Paint()..color = const Color(0xFF2B303B));
     canvas.drawRect(
       Rect.fromLTWH(roadLeft, 0, 10, size.height),
       Paint()..color = const Color(0xFF1E222A),
@@ -572,7 +631,6 @@ class _RoadPainter extends CustomPainter {
       }
     }
 
-    // Side reflectors
     final reflector = Paint()..color = const Color(0xFFE8B84A);
     var ry = -40.0 + offset * 0.9;
     while (ry < size.height) {

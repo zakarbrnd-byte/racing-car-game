@@ -248,7 +248,8 @@ class _CarCard extends StatelessWidget {
               child: Image.asset(
                 car.assetPath,
                 fit: BoxFit.contain,
-                filterQuality: FilterQuality.high,
+                filterQuality: FilterQuality.medium,
+                gaplessPlayback: true,
               ),
             ),
           ),
